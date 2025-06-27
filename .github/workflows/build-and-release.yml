@@ -1,43 +1,48 @@
-name: Build Gadgetbridge on new tag
+name: Build Gadgetbridge APK on new tag
 
 on:
+  # Scheduled run every day at 03:00 UTC
   schedule:
     - cron: '0 3 * * *'
+  # Manual trigger via GitHub UI
   workflow_dispatch:
 
 jobs:
   build:
+    name: Build & release Gadgetbridge stable APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout this repo
+      - name: Checkout this repository
         uses: actions/checkout@v3
 
       - name: Read previous tag from latest_tag.txt
         id: read_prev
         run: |
+          set -euo pipefail
           if [ -f latest_tag.txt ]; then
             PREV_TAG=$(cat latest_tag.txt)
             echo "Previous tag: $PREV_TAG"
-            echo "PREVIOUS_TAG=$PREV_TAG" >> $GITHUB_ENV
           else
+            PREV_TAG="none"
             echo "No previous tag found"
-            echo "PREVIOUS_TAG=none" >> $GITHUB_ENV
           fi
+          echo "PREVIOUS_TAG=$PREV_TAG" >> $GITHUB_ENV
 
-      - name: Get latest tag from Gadgetbridge (lightweight)
+      - name: Get latest tag from Gadgetbridge (no clone)
         id: get_tag
         run: |
-          latest_tag=$(git ls-remote --tags https://codeberg.org/Freeyourgadget/Gadgetbridge.git | \
+          set -euo pipefail
+          LATEST_TAG=$(git ls-remote --tags https://codeberg.org/Freeyourgadget/Gadgetbridge.git | \
             awk '{print $2}' | grep -E 'refs/tags/' | sed 's#refs/tags/##' | \
             grep -v '\^{}' | sort -V | tail -n1)
+          echo "Latest tag in Gadgetbridge: $LATEST_TAG"
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
 
-          echo "Latest tag in Gadgetbridge: $latest_tag"
-          echo "LATEST_TAG=$latest_tag" >> $GITHUB_ENV
-
-      - name: Compare tags
+      - name: Compare latest tag with previous
         id: tag_check
         run: |
+          set -euo pipefail
           if [ "${{ env.LATEST_TAG }}" = "${{ env.PREVIOUS_TAG }}" ]; then
             echo "No new tag. Skipping build."
             echo "build_needed=false" >> $GITHUB_OUTPUT
@@ -56,33 +61,44 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Clone Gadgetbridge and build APK
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: Clone and build Gadgetbridge APK
         run: |
+          set -euo pipefail
           git clone --depth 1 --branch "${{ env.LATEST_TAG }}" https://codeberg.org/Freeyourgadget/Gadgetbridge.git
           cd Gadgetbridge
           ./gradlew assembleMainRelease
           mv app/build/outputs/apk/mainline/release/*.apk ../Gadgetbridge-${{ env.LATEST_TAG }}.apk
 
-      - name: Upload APK
+      - name: Upload built APK
         uses: actions/upload-artifact@v4
         with:
           name: Gadgetbridge-${{ env.LATEST_TAG }}
           path: Gadgetbridge-${{ env.LATEST_TAG }}.apk
 
-      - name: Create GitHub Release
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ env.LATEST_TAG }}
-          name: Release ${{ env.LATEST_TAG }}
+          name: v${{ env.LATEST_TAG }}
           files: Gadgetbridge-${{ env.LATEST_TAG }}.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Save latest tag for next run
+      - name: Save latest tag to file
         run: echo "${{ env.LATEST_TAG }}" > latest_tag.txt
 
-      - name: Commit latest_tag.txt
+      - name: Commit latest_tag.txt update
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add latest_tag.txt
