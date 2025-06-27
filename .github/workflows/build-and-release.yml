@@ -33,7 +33,7 @@ jobs:
           ./gradlew assembleMainRelease
 
       - name: Upload APK as artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Gadgetbridge-${{ env.TAG_NAME }}
           path: Gadgetbridge/app/build/outputs/apk/main/release/*.apk
