@@ -10,8 +10,45 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout this repo (for workflow scripts, optional)
+      - name: Checkout this repo
         uses: actions/checkout@v3
+
+      - name: Read previous tag from latest_tag.txt
+        id: read_prev
+        run: |
+          if [ -f latest_tag.txt ]; then
+            PREV_TAG=$(cat latest_tag.txt)
+            echo "Previous tag: $PREV_TAG"
+            echo "PREVIOUS_TAG=$PREV_TAG" >> $GITHUB_ENV
+          else
+            echo "No previous tag found"
+            echo "PREVIOUS_TAG=none" >> $GITHUB_ENV
+          fi
+
+      - name: Get latest tag from Gadgetbridge (lightweight)
+        id: get_tag
+        run: |
+          latest_tag=$(git ls-remote --tags https://codeberg.org/Freeyourgadget/Gadgetbridge.git | \
+            awk '{print $2}' | grep -E 'refs/tags/' | sed 's#refs/tags/##' | \
+            grep -v '\^{}' | sort -V | tail -n1)
+
+          echo "Latest tag in Gadgetbridge: $latest_tag"
+          echo "LATEST_TAG=$latest_tag" >> $GITHUB_ENV
+
+      - name: Compare tags
+        id: tag_check
+        run: |
+          if [ "${{ env.LATEST_TAG }}" = "${{ env.PREVIOUS_TAG }}" ]; then
+            echo "No new tag. Skipping build."
+            echo "build_needed=false" >> $GITHUB_OUTPUT
+          else
+            echo "New tag detected. Proceeding with build."
+            echo "build_needed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Exit if no new tag
+        if: steps.tag_check.outputs.build_needed == 'false'
+        run: exit 0
 
       - name: Setup Java 21
         uses: actions/setup-java@v3
@@ -19,31 +56,35 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Clone Gadgetbridge
+      - name: Clone Gadgetbridge and build APK
         run: |
-          git clone https://codeberg.org/Freeyourgadget/Gadgetbridge.git
+          git clone --depth 1 --branch "${{ env.LATEST_TAG }}" https://codeberg.org/Freeyourgadget/Gadgetbridge.git
           cd Gadgetbridge
-          latest_tag=$(git describe --tags $(git rev-list --tags --max-count=1))
-          echo "Latest tag is $latest_tag"
-          git checkout "$latest_tag"
-          echo "TAG_NAME=$latest_tag" >> $GITHUB_ENV
-
-      - name: Build APK
-        working-directory: Gadgetbridge
-        run: |
           ./gradlew assembleMainRelease
+          mv app/build/outputs/apk/mainline/release/*.apk ../Gadgetbridge-${{ env.LATEST_TAG }}.apk
 
-      - name: Upload APK as artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Gadgetbridge-${{ env.TAG_NAME }}
-          path: Gadgetbridge/app/build/outputs/apk/mainline/release/*.apk
+          name: Gadgetbridge-${{ env.LATEST_TAG }}
+          path: Gadgetbridge-${{ env.LATEST_TAG }}.apk
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ env.TAG_NAME }}
-          name: Release ${{ env.TAG_NAME }}
-          files: Gadgetbridge/app/build/outputs/apk/mainline/release/*.apk
+          tag_name: ${{ env.LATEST_TAG }}
+          name: Release ${{ env.LATEST_TAG }}
+          files: Gadgetbridge-${{ env.LATEST_TAG }}.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Save latest tag for next run
+        run: echo "${{ env.LATEST_TAG }}" > latest_tag.txt
+
+      - name: Commit latest_tag.txt
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add latest_tag.txt
+          git commit -m "Update latest_tag.txt to ${{ env.LATEST_TAG }}"
+          git push
