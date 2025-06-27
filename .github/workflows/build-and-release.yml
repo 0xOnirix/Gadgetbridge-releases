@@ -1,0 +1,48 @@
+name: Build Gadgetbridge on new tag
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout this repo (for workflow scripts, optional)
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y openjdk-17-jdk
+
+      - name: Clone Gadgetbridge
+        run: |
+          git clone https://codeberg.org/Freeyourgadget/Gadgetbridge.git
+          cd Gadgetbridge
+          latest_tag=$(git describe --tags $(git rev-list --tags --max-count=1))
+          echo "Latest tag is $latest_tag"
+          git checkout "$latest_tag"
+          echo "TAG_NAME=$latest_tag" >> $GITHUB_ENV
+
+      - name: Build APK
+        working-directory: Gadgetbridge
+        run: |
+          ./gradlew assembleMainRelease
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: Gadgetbridge-${{ env.TAG_NAME }}
+          path: Gadgetbridge/app/build/outputs/apk/main/release/*.apk
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: Release ${{ env.TAG_NAME }}
+          files: Gadgetbridge/app/build/outputs/apk/main/release/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
