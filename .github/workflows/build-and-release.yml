@@ -37,13 +37,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Gadgetbridge-${{ env.TAG_NAME }}
-          path: Gadgetbridge/app/build/outputs/apk/main/release/*.apk
+          path: Gadgetbridge/app/build/outputs/apk/mainline/release/*.apk
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ env.TAG_NAME }}
           name: Release ${{ env.TAG_NAME }}
-          files: Gadgetbridge/app/build/outputs/apk/main/release/*.apk
+          files: Gadgetbridge/app/build/outputs/apk/mainline/release/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
