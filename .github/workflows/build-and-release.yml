@@ -1,10 +1,8 @@
 name: Build Gadgetbridge APK on new tag
 
 on:
-  # Scheduled run every day at 03:00 UTC
   schedule:
     - cron: '0 3 * * *'
-  # Manual trigger via GitHub UI
   workflow_dispatch:
 
 jobs:
@@ -45,21 +43,23 @@ jobs:
           set -euo pipefail
           if [ "${{ env.LATEST_TAG }}" = "${{ env.PREVIOUS_TAG }}" ]; then
             echo "No new tag. Skipping build."
-            echo "build_needed=false" >> "$GITHUB_OUTPUT"
+            echo "build_needed=false" >> $GITHUB_OUTPUT
           else
             echo "New tag detected. Proceeding with build."
-            echo "build_needed=true" >> "$GITHUB_OUTPUT"
+            echo "build_needed=true" >> $GITHUB_OUTPUT
           fi
 
+      - name: Exit if no new tag
+        if: steps.tag_check.outputs.build_needed == 'false'
+        run: exit 0
+
       - name: Setup Java 21
-        if: steps.tag_check.outputs.build_needed == 'true'
         uses: actions/setup-java@v3
         with:
           distribution: temurin
           java-version: 21
 
       - name: Cache Gradle dependencies
-        if: steps.tag_check.outputs.build_needed == 'true'
         uses: actions/cache@v3
         with:
           path: |
@@ -69,7 +69,6 @@ jobs:
           restore-keys: gradle-
 
       - name: Clone and build Gadgetbridge APK
-        if: steps.tag_check.outputs.build_needed == 'true'
         run: |
           set -euo pipefail
           git clone --depth 1 --branch "${{ env.LATEST_TAG }}" https://codeberg.org/Freeyourgadget/Gadgetbridge.git
@@ -77,12 +76,28 @@ jobs:
           ./gradlew assembleMainRelease
           mv app/build/outputs/apk/mainline/release/*.apk ../Gadgetbridge-${{ env.LATEST_TAG }}.apk
 
-      - name: Upload built APK
+      - name: Decode keystore
+        if: steps.tag_check.outputs.build_needed == 'true'
+        run: |
+          echo "${{ secrets.SIGNING_KEYSTORE }}" | base64 -d > my-release-key.jks
+
+      - name: Sign APK
+        if: steps.tag_check.outputs.build_needed == 'true'
+        run: |
+          apksigner sign \
+            --ks my-release-key.jks \
+            --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
+            --ks-pass pass:${{ secrets.KEYSTORE_PASSWORD }} \
+            --key-pass pass:${{ secrets.KEY_PASSWORD }} \
+            --out Gadgetbridge-${{ env.LATEST_TAG }}-signed.apk \
+            Gadgetbridge-${{ env.LATEST_TAG }}.apk
+
+      - name: Upload signed APK
         if: steps.tag_check.outputs.build_needed == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: Gadgetbridge-${{ env.LATEST_TAG }}
-          path: Gadgetbridge-${{ env.LATEST_TAG }}.apk
+          name: Gadgetbridge-${{ env.LATEST_TAG }}-signed
+          path: Gadgetbridge-${{ env.LATEST_TAG }}-signed.apk
 
       - name: Create GitHub release
         if: steps.tag_check.outputs.build_needed == 'true'
@@ -90,20 +105,18 @@ jobs:
         with:
           tag_name: ${{ env.LATEST_TAG }}
           name: v${{ env.LATEST_TAG }}
-          files: Gadgetbridge-${{ env.LATEST_TAG }}.apk
+          files: Gadgetbridge-${{ env.LATEST_TAG }}-signed.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Save latest tag to file
-        if: steps.tag_check.outputs.build_needed == 'true'
         run: echo "${{ env.LATEST_TAG }}" > latest_tag.txt
 
       - name: Commit latest_tag.txt update
-        if: steps.tag_check.outputs.build_needed == 'true'
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add latest_tag.txt
-          git commit -m "Update latest_tag.txt to ${{ env.LATEST_TAG }}"
+          git commit -m "Update latest_tag.txt to ${{ env.LATEST_TAG }}" || echo "No changes to commit"
           git push
