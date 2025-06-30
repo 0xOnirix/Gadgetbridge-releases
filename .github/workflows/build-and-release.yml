@@ -16,18 +16,15 @@ jobs:
       - name: Read previous tag
         id: read_prev
         run: |
-          set -euo pipefail
           if [ -f latest_tag.txt ]; then
-            PREV_TAG=$(cat latest_tag.txt)
+            echo "PREVIOUS_TAG=$(cat latest_tag.txt)" >> $GITHUB_ENV
           else
-            PREV_TAG=none
+            echo "PREVIOUS_TAG=none" >> $GITHUB_ENV
           fi
-          echo "PREVIOUS_TAG=$PREV_TAG" >> $GITHUB_ENV
 
       - name: Fetch latest tag
         id: get_tag
         run: |
-          set -euo pipefail
           LATEST_TAG=$(git ls-remote --tags https://codeberg.org/Freeyourgadget/Gadgetbridge.git \
             | awk '{print $2}' \
             | grep -E '^refs/tags/' \
@@ -40,27 +37,27 @@ jobs:
       - name: Compare tags
         id: tag_check
         run: |
-          set -euo pipefail
           if [ "${{ env.LATEST_TAG }}" = "${{ env.PREVIOUS_TAG }}" ]; then
             echo "build_needed=false" >> "$GITHUB_OUTPUT"
           else
             echo "build_needed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Setup Java 21
+      - name: Setup Java
         if: steps.tag_check.outputs.build_needed == 'true'
         uses: actions/setup-java@v3
         with:
           distribution: temurin
           java-version: 21
 
-      - name: Setup Android SDK & apksigner
+      - name: Install Android SDK & Build Tools
         if: steps.tag_check.outputs.build_needed == 'true'
         run: |
           mkdir -p $HOME/android-sdk/cmdline-tools
-          wget https://dl.google.com/android/repository/commandlinetools-linux-10406996_latest.zip \
-            -O cmdline-tools.zip
-          unzip cmdline-tools.zip -d $HOME/android-sdk/cmdline-tools/latest
+          cd $HOME/android-sdk/cmdline-tools
+          wget https://dl.google.com/android/repository/commandlinetools-linux-10406996_latest.zip -O tools.zip
+          unzip tools.zip -d tmp
+          mv tmp/cmdline-tools latest
           export ANDROID_SDK_ROOT=$HOME/android-sdk
           export PATH=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH
           yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses
@@ -84,15 +81,13 @@ jobs:
           ./gradlew assembleMainRelease
           mv app/build/outputs/apk/mainline/release/*.apk ../Gadgetbridge.apk
 
-      - name: Decode keystore
+      - name: Decode keystore from secret
         if: steps.tag_check.outputs.build_needed == 'true'
         run: |
           echo "${{ secrets.SIGNING_KEYSTORE }}" | base64 -d > my-release-key.jks
 
       - name: Sign APK
         if: steps.tag_check.outputs.build_needed == 'true'
-        env:
-          ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
         run: |
           export PATH=$HOME/android-sdk/build-tools/34.0.0:$PATH
           apksigner sign \
