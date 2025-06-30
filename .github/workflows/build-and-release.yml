@@ -51,19 +51,15 @@ jobs:
             echo "build_needed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Exit if no new tag
-        if: steps.tag_check.outputs.build_needed == 'false'
-        run: |
-          echo "No new tag detected. Exiting."
-          exit 0
-
       - name: Setup Java 21
+        if: steps.tag_check.outputs.build_needed == 'true'
         uses: actions/setup-java@v3
         with:
           distribution: temurin
           java-version: 21
 
       - name: Cache Gradle dependencies
+        if: steps.tag_check.outputs.build_needed == 'true'
         uses: actions/cache@v3
         with:
           path: |
@@ -73,6 +69,7 @@ jobs:
           restore-keys: gradle-
 
       - name: Clone and build Gadgetbridge APK
+        if: steps.tag_check.outputs.build_needed == 'true'
         run: |
           set -euo pipefail
           git clone --depth 1 --branch "${{ env.LATEST_TAG }}" https://codeberg.org/Freeyourgadget/Gadgetbridge.git
@@ -81,12 +78,14 @@ jobs:
           mv app/build/outputs/apk/mainline/release/*.apk ../Gadgetbridge-${{ env.LATEST_TAG }}.apk
 
       - name: Upload built APK
+        if: steps.tag_check.outputs.build_needed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: Gadgetbridge-${{ env.LATEST_TAG }}
           path: Gadgetbridge-${{ env.LATEST_TAG }}.apk
 
       - name: Create GitHub release
+        if: steps.tag_check.outputs.build_needed == 'true'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ env.LATEST_TAG }}
@@ -96,9 +95,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Save latest tag to file
+        if: steps.tag_check.outputs.build_needed == 'true'
         run: echo "${{ env.LATEST_TAG }}" > latest_tag.txt
 
       - name: Commit latest_tag.txt update
+        if: steps.tag_check.outputs.build_needed == 'true'
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
