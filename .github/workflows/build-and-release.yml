@@ -7,59 +7,67 @@ on:
 
 jobs:
   build:
-    name: Build & release Gadgetbridge stable APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout this repository
+      - name: Checkout repo
         uses: actions/checkout@v3
 
-      - name: Read previous tag from latest_tag.txt
+      - name: Read previous tag
         id: read_prev
         run: |
           set -euo pipefail
           if [ -f latest_tag.txt ]; then
             PREV_TAG=$(cat latest_tag.txt)
-            echo "Previous tag: $PREV_TAG"
           else
-            PREV_TAG="none"
-            echo "No previous tag found"
+            PREV_TAG=none
           fi
           echo "PREVIOUS_TAG=$PREV_TAG" >> $GITHUB_ENV
 
-      - name: Get latest tag from Gadgetbridge (no clone)
+      - name: Fetch latest tag
         id: get_tag
         run: |
           set -euo pipefail
-          LATEST_TAG=$(git ls-remote --tags https://codeberg.org/Freeyourgadget/Gadgetbridge.git | \
-            awk '{print $2}' | grep -E 'refs/tags/' | sed 's#refs/tags/##' | \
-            grep -v '\^{}' | sort -V | tail -n1)
-          echo "Latest tag in Gadgetbridge: $LATEST_TAG"
+          LATEST_TAG=$(git ls-remote --tags https://codeberg.org/Freeyourgadget/Gadgetbridge.git \
+            | awk '{print $2}' \
+            | grep -E '^refs/tags/' \
+            | sed 's|refs/tags/||' \
+            | grep -v '\^{}' \
+            | sort -V \
+            | tail -n1)
           echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
 
-      - name: Compare latest tag with previous
+      - name: Compare tags
         id: tag_check
         run: |
           set -euo pipefail
           if [ "${{ env.LATEST_TAG }}" = "${{ env.PREVIOUS_TAG }}" ]; then
-            echo "No new tag. Skipping build."
-            echo "build_needed=false" >> $GITHUB_OUTPUT
+            echo "build_needed=false" >> "$GITHUB_OUTPUT"
           else
-            echo "New tag detected. Proceeding with build."
-            echo "build_needed=true" >> $GITHUB_OUTPUT
+            echo "build_needed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Exit if no new tag
-        if: steps.tag_check.outputs.build_needed == 'false'
-        run: exit 0
-
       - name: Setup Java 21
+        if: steps.tag_check.outputs.build_needed == 'true'
         uses: actions/setup-java@v3
         with:
           distribution: temurin
           java-version: 21
 
-      - name: Cache Gradle dependencies
+      - name: Setup Android SDK & apksigner
+        if: steps.tag_check.outputs.build_needed == 'true'
+        run: |
+          mkdir -p $HOME/android-sdk/cmdline-tools
+          wget https://dl.google.com/android/repository/commandlinetools-linux-10406996_latest.zip \
+            -O cmdline-tools.zip
+          unzip cmdline-tools.zip -d $HOME/android-sdk/cmdline-tools/latest
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          export PATH=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH
+          yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses
+          sdkmanager --sdk_root=$ANDROID_SDK_ROOT "build-tools;34.0.0"
+
+      - name: Cache Gradle
+        if: steps.tag_check.outputs.build_needed == 'true'
         uses: actions/cache@v3
         with:
           path: |
@@ -68,13 +76,13 @@ jobs:
           key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-
 
-      - name: Clone and build Gadgetbridge APK
+      - name: Build APK
+        if: steps.tag_check.outputs.build_needed == 'true'
         run: |
-          set -euo pipefail
           git clone --depth 1 --branch "${{ env.LATEST_TAG }}" https://codeberg.org/Freeyourgadget/Gadgetbridge.git
           cd Gadgetbridge
           ./gradlew assembleMainRelease
-          mv app/build/outputs/apk/mainline/release/*.apk ../Gadgetbridge-${{ env.LATEST_TAG }}.apk
+          mv app/build/outputs/apk/mainline/release/*.apk ../Gadgetbridge.apk
 
       - name: Decode keystore
         if: steps.tag_check.outputs.build_needed == 'true'
@@ -83,14 +91,17 @@ jobs:
 
       - name: Sign APK
         if: steps.tag_check.outputs.build_needed == 'true'
+        env:
+          ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
         run: |
+          export PATH=$HOME/android-sdk/build-tools/34.0.0:$PATH
           apksigner sign \
             --ks my-release-key.jks \
             --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
-            --ks-pass pass:${{ secrets.KEYSTORE_PASSWORD }} \
-            --key-pass pass:${{ secrets.KEY_PASSWORD }} \
+            --ks-pass pass:"${{ secrets.KEYSTORE_PASSWORD }}" \
+            --key-pass pass:"${{ secrets.KEY_PASSWORD }}" \
             --out Gadgetbridge-${{ env.LATEST_TAG }}-signed.apk \
-            Gadgetbridge-${{ env.LATEST_TAG }}.apk
+            Gadgetbridge.apk
 
       - name: Upload signed APK
         if: steps.tag_check.outputs.build_needed == 'true'
@@ -109,14 +120,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Save latest tag to file
+      - name: Save latest tag
+        if: steps.tag_check.outputs.build_needed == 'true'
         run: echo "${{ env.LATEST_TAG }}" > latest_tag.txt
 
-      - name: Commit latest_tag.txt update
+      - name: Commit latest_tag.txt
+        if: steps.tag_check.outputs.build_needed == 'true'
         run: |
-          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add latest_tag.txt
-          git commit -m "Update latest_tag.txt to ${{ env.LATEST_TAG }}" || echo "No changes to commit"
+          git commit -m "Update latest_tag.txt to ${{ env.LATEST_TAG }}" || echo "No changes"
           git push
